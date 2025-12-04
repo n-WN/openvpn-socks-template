@@ -22,6 +22,9 @@ SOCKS5_USER="${SOCKS5_USER:-}"
 SOCKS5_PASS="${SOCKS5_PASS:-}"
 SOCKS_LOG="${SOCKS_LOG:-error}"
 SOCKS_MAX_CONN="${SOCKS_MAX_CONN:-50}"
+SOCKS_CLIENT_CIDRS="${SOCKS_CLIENT_CIDRS:-0.0.0.0/0}"
+
+ENABLE_KILL_SWITCH="${ENABLE_KILL_SWITCH:-0}"
 
 if [ ! -f "$OPENVPN_CONFIG" ]; then
   log "fatal: OPENVPN_CONFIG not found: $OPENVPN_CONFIG"
@@ -101,7 +104,7 @@ clientmethod: none
 user.privileged: root
 user.notprivileged: nobody
 client pass {
-  from: 0.0.0.0/0 to: 0.0.0.0/0
+  from: ${SOCKS_CLIENT_CIDRS} to: 0.0.0.0/0
   log: ${SOCKS_LOG}
 }
 socks pass {
@@ -145,11 +148,19 @@ start_openvpn() {
   cfgbase=$(basename "$cfgpath")
   set -- openvpn --cd "$cfgdir" --config "$cfgbase" \
     --writepid /run/openvpn.pid \
-    --log "$OPENVPN_LOG" \
-    --daemon
+    --log "$OPENVPN_LOG"
 
   if [ -n "$AUTH_FILE" ]; then
     set -- "$@" --auth-user-pass "$AUTH_FILE"
+  fi
+
+  # If user did not supply explicit up/down hooks, inject our DNS hook
+  HOOKED=0
+  case " ${OPENVPN_EXTRA_ARGS} " in
+    *" --up "*|*" --down "*|*" --script-security "*) HOOKED=1 ;;
+  esac
+  if [ "$HOOKED" = "0" ]; then
+    set -- "$@" --script-security 2 --up /etc/openvpn/scripts/update-resolv.sh --down /etc/openvpn/scripts/update-resolv.sh
   fi
 
   # Apply verbosity unless user overrode via EXTRA_ARGS
@@ -164,7 +175,9 @@ start_openvpn() {
   fi
 
   log "starting openvpn with config $OPENVPN_CONFIG"
-  "$@" || log "warning: openvpn exited non-zero; continuing (healthcheck may mark unhealthy)"
+  "$@" &
+  OVPN_PID=$!
+  log "openvpn pid: $OVPN_PID"
 }
 
 start_socks() {
@@ -178,37 +191,87 @@ start_socks() {
     adduser -D "$SOCKS5_USER" || true
     echo "$SOCKS5_USER:$SOCKS5_PASS" | chpasswd
   fi
-  log "starting dante sockd on ${SOCKS5_BIND}:${SOCKS5_PORT} (foreground)"
-  # run in foreground so container PID 1 stays alive
-  exec sockd -f /etc/dante/sockd.conf -N "$SOCKS_MAX_CONN"
+  log "starting dante sockd on ${SOCKS5_BIND}:${SOCKS5_PORT} (daemon)"
+  sockd -f /etc/dante/sockd.conf -N "$SOCKS_MAX_CONN" -D
+}
+
+configure_killswitch() {
+  [ "$ENABLE_KILL_SWITCH" = "1" ] || return 0
+  log "enabling kill-switch (iptables)"
+  # Determine remote host/port/proto from ovpn file
+  cfgpath="$OPENVPN_CONFIG"
+  cfgdir=$(dirname "$cfgpath"); cfgbase=$(basename "$cfgpath")
+  # Read from the ovpn file directly
+  remote_line=$(grep -E '^\s*remote\s+' "$cfgpath" | head -n1 || true)
+  proto_line=$(grep -E '^\s*proto\s+' "$cfgpath" | head -n1 || true)
+  remote_host=$(printf '%s\n' "$remote_line" | awk '{print $2}')
+  remote_port=$(printf '%s\n' "$remote_line" | awk '{print $3}')
+  proto=$(printf '%s\n' "$proto_line" | awk '{print $2}')
+  [ -n "$proto" ] || proto=tcp
+  [ -n "$remote_port" ] || remote_port=1194
+  # Resolve host to IP (prefers getent)
+  remote_ip=""
+  if command -v getent >/dev/null 2>&1; then
+    remote_ip=$(getent hosts "$remote_host" | awk '{print $1}' | head -n1 || true)
+  fi
+  if [ -z "$remote_ip" ]; then
+    remote_ip=$(sh -lc "nslookup $remote_host 2>/dev/null | awk '/^Address [0-9]*: /{print \$3; exit} /^Address: /{print \$2; exit}'" || true)
+  fi
+  # Allow current resolvers for DNS lookups (for resilience)
+  resolvers=$(awk '/^nameserver /{print $2}' /etc/resolv.conf | awk '!seen[$0]++')
+  # Apply OUTPUT policy; be careful to not lock ourselves out mid-script
+  iptables -P OUTPUT DROP || true
+  iptables -F OUTPUT || true
+  # 1) allow loopback
+  iptables -A OUTPUT -o lo -j ACCEPT
+  # 2) allow established
+  iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  # 3) allow VPN tunnel egress
+  iptables -A OUTPUT -o tun+ -j ACCEPT
+  # 4) allow DNS to current resolvers
+  for ns in $resolvers; do
+    iptables -A OUTPUT -o eth0 -p udp -d "$ns" --dport 53 -j ACCEPT
+    iptables -A OUTPUT -o eth0 -p tcp -d "$ns" --dport 53 -j ACCEPT
+  done
+  # 5) allow OpenVPN remote endpoint
+  if [ -n "$remote_ip" ]; then
+    case "$proto" in
+      tcp) iptables -A OUTPUT -o eth0 -p tcp -d "$remote_ip" --dport "$remote_port" -j ACCEPT ;;
+      udp) iptables -A OUTPUT -o eth0 -p udp -d "$remote_ip" --dport "$remote_port" -j ACCEPT ;;
+      *) iptables -A OUTPUT -o eth0 -p tcp -d "$remote_ip" --dport "$remote_port" -j ACCEPT ;;
+    esac
+  else
+    log "warning: could not resolve remote host '$remote_host' for kill-switch; only DNS allowed"
+  fi
+  log "kill-switch rules applied"
 }
 
 ensure_tun
+configure_killswitch
+
+# Start OpenVPN (background) and keep container lifecycle bound to it
 start_openvpn
-wait_for_tun
-apply_vpn_dns
-print_net_info
 
 # Optional: continuously stream OpenVPN log to stdout so `docker logs` stays fresh
 if [ "$STREAM_OPENVPN_LOG" = "1" ]; then
-  (
-    i=0
-    # Wait up to ~30s for log file to appear
-    while [ ! -f "$OPENVPN_LOG" ] && [ $i -lt 30 ]; do
-      i=$((i+1))
-      sleep 1
-    done
-    if [ -f "$OPENVPN_LOG" ]; then
-      # Use "+1" to stream entire file or a number to stream last N lines
-      # shellcheck disable=SC2086
-      tail -n $STREAM_OPENVPN_LOG_LINES -F "$OPENVPN_LOG" &
-    else
-      log "warning: $OPENVPN_LOG not found; skip streaming"
-    fi
-  )
-else
-  sleep 1
-  [ -f "$OPENVPN_LOG" ] && tail -n 80 "$OPENVPN_LOG" || true
+  i=0
+  while [ ! -f "$OPENVPN_LOG" ] && [ $i -lt 30 ]; do i=$((i+1)); sleep 1; done
+  if [ -f "$OPENVPN_LOG" ]; then
+    # shellcheck disable=SC2086
+    tail -n $STREAM_OPENVPN_LOG_LINES -F "$OPENVPN_LOG" &
+  else
+    log "warning: $OPENVPN_LOG not found; skip streaming"
+  fi
 fi
 
+wait_for_tun
+apply_vpn_dns || true
+print_net_info
+
+# Start sockd only after tun is up
 start_socks
+
+# Ensure container exits when openvpn exits
+trap 'kill -TERM $OVPN_PID 2>/dev/null || true; exit 0' TERM INT
+wait $OVPN_PID
+exit $?

@@ -10,10 +10,12 @@ RUN apk add --no-cache \
       dumb-init
 
 # Copy entrypoint and healthcheck scripts from scripts/
+RUN mkdir -p /etc/openvpn/scripts
 COPY scripts/entrypoint-openvpn-socks.sh /usr/local/bin/entrypoint-openvpn-socks.sh
 COPY scripts/healthcheck-openvpn.sh /usr/local/bin/healthcheck-openvpn.sh
+COPY scripts/update-resolv.sh /etc/openvpn/scripts/update-resolv.sh
 
-RUN chmod +x /usr/local/bin/entrypoint-openvpn-socks.sh /usr/local/bin/healthcheck-openvpn.sh
+RUN chmod +x /usr/local/bin/entrypoint-openvpn-socks.sh /usr/local/bin/healthcheck-openvpn.sh /etc/openvpn/scripts/update-resolv.sh
 
 ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/entrypoint-openvpn-socks.sh"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD /usr/local/bin/healthcheck-openvpn.sh
