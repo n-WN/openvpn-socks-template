@@ -13,6 +13,8 @@ OPENVPN_LOG="${OPENVPN_LOG:-/var/log/openvpn.log}"
 OPENVPN_VERB="${OPENVPN_VERB:-3}"
 USE_VPN_DNS="${USE_VPN_DNS:-1}"
 VPN_DNS="${VPN_DNS:-}"
+STREAM_OPENVPN_LOG="${STREAM_OPENVPN_LOG:-0}"
+STREAM_OPENVPN_LOG_LINES="${STREAM_OPENVPN_LOG_LINES:-+1}"
 
 SOCKS5_PORT="${SOCKS5_PORT:-1080}"
 SOCKS5_BIND="${SOCKS5_BIND:-0.0.0.0}"
@@ -187,7 +189,26 @@ wait_for_tun
 apply_vpn_dns
 print_net_info
 
-sleep 1
-[ -f "$OPENVPN_LOG" ] && tail -n 80 "$OPENVPN_LOG" || true
+# Optional: continuously stream OpenVPN log to stdout so `docker logs` stays fresh
+if [ "$STREAM_OPENVPN_LOG" = "1" ]; then
+  (
+    i=0
+    # Wait up to ~30s for log file to appear
+    while [ ! -f "$OPENVPN_LOG" ] && [ $i -lt 30 ]; do
+      i=$((i+1))
+      sleep 1
+    done
+    if [ -f "$OPENVPN_LOG" ]; then
+      # Use "+1" to stream entire file or a number to stream last N lines
+      # shellcheck disable=SC2086
+      tail -n $STREAM_OPENVPN_LOG_LINES -F "$OPENVPN_LOG" &
+    else
+      log "warning: $OPENVPN_LOG not found; skip streaming"
+    fi
+  )
+else
+  sleep 1
+  [ -f "$OPENVPN_LOG" ] && tail -n 80 "$OPENVPN_LOG" || true
+fi
 
 start_socks

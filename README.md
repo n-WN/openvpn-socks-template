@@ -48,6 +48,7 @@ docker run -d --name ovpn-socks \
 
 ## 日志与健康检查
 - OpenVPN 日志：默认写入 `/var/log/openvpn.log`（可通过 `OPENVPN_LOG` 指定），启动时会自动 `tail` 最近 80 行；也可将宿主机目录挂载到 `/var/log` 持久化。
+  - 若需让 `docker logs` 持续输出 OpenVPN 日志，设置 `STREAM_OPENVPN_LOG=1`（默认 0）。可用 `STREAM_OPENVPN_LOG_LINES=+1` 输出全量；或设为数字仅输出最近 N 行后持续跟随。
 - OpenVPN 详细程度：`OPENVPN_VERB`（默认 3），也可用 `OPENVPN_EXTRA_ARGS` 自定义（若两者同时指定，以 `EXTRA_ARGS` 内为准）。
 - SOCKS 日志：`SOCKS_LOG`（默认 `error`，可设为 `connect error` 记录连接与错误）。最大并发 `SOCKS_MAX_CONN`（默认 50）。
 - 健康检查：镜像内置 `HEALTHCHECK`，脚本检查：
