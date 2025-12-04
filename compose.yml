@@ -1,0 +1,26 @@
+services:
+  openvpn-socks:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openvpn-socks:lite
+    container_name: openvpn-socks
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "${EXPOSE_SOCKS5_PORT:-1080}:${SOCKS5_PORT:-1080}"
+    environment:
+      # .ovpn filename within /vpn mount (default uses sample)
+      OPENVPN_CONFIG: ${OPENVPN_CONFIG:-/vpn/client.ovpn}
+      OPENVPN_AUTH_USER: ${OPENVPN_AUTH_USER:-}
+      OPENVPN_AUTH_PASS: ${OPENVPN_AUTH_PASS:-}
+      OPENVPN_EXTRA_ARGS: ${OPENVPN_EXTRA_ARGS:-}
+      SOCKS5_PORT: ${SOCKS5_PORT:-1080}
+      SOCKS5_BIND: ${SOCKS5_BIND:-0.0.0.0}
+      SOCKS5_USER: ${SOCKS5_USER:-}
+      SOCKS5_PASS: ${SOCKS5_PASS:-}
+    volumes:
+      - ${VPN_PROFILE_DIR:-./config/vpn-profiles/sample}:/vpn:ro
+    restart: unless-stopped

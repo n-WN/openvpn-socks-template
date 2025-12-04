@@ -1,0 +1,8 @@
+# Ignore real vpn profiles by default
+vpn-profiles/*
+# Keep the sanitized sample in repo
+!vpn-profiles/sample/
+!vpn-profiles/sample/**
+
+# Never commit auth files
+auth/

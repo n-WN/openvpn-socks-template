@@ -1,0 +1,13 @@
+# Node/editor/OS
+.DS_Store
+*.swp
+
+# Runtime
+*.log
+
+# Avoid committing real VPN materials; keep sanitized sample only (handled in config/.gitignore)
+# Avoid accidental auth leakage
+config/auth/
+
+# Do not commit local notes
+docs/

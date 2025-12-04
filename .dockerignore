@@ -1,0 +1,7 @@
+# Keep image minimal; configs are mounted at runtime
+config/
+docs/
+compose.yml
+.env*
+.git
+.DS_Store
