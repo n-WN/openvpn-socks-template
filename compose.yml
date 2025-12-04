@@ -17,6 +17,9 @@ services:
       # OpenVPN logging and verbosity
       OPENVPN_LOG: ${OPENVPN_LOG:-/var/log/openvpn.log}
       OPENVPN_VERB: ${OPENVPN_VERB:-3}
+      # DNS handling
+      USE_VPN_DNS: ${USE_VPN_DNS:-1}
+      VPN_DNS: ${VPN_DNS:-}
       OPENVPN_AUTH_USER: ${OPENVPN_AUTH_USER:-}
       OPENVPN_AUTH_PASS: ${OPENVPN_AUTH_PASS:-}
       OPENVPN_EXTRA_ARGS: ${OPENVPN_EXTRA_ARGS:-}
@@ -26,6 +29,8 @@ services:
       SOCKS_MAX_CONN: ${SOCKS_MAX_CONN:-50}
       SOCKS5_USER: ${SOCKS5_USER:-}
       SOCKS5_PASS: ${SOCKS5_PASS:-}
+      # Healthcheck strictness
+      HEALTHCHECK_STRICT: ${HEALTHCHECK_STRICT:-0}
     volumes:
       - ${VPN_PROFILE_DIR:-./config/vpn-profiles/sample}:/vpn:ro  # put client.ovpn and certs here
       # - ./logs:/var/log  # optional: persist logs on host

@@ -5,3 +5,4 @@ compose.yml
 .env*
 .git
 .DS_Store
+key/

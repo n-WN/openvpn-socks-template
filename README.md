@@ -34,7 +34,7 @@ docker compose up -d
 ```bash
 docker run -d --name ovpn-socks \
   --cap-add=NET_ADMIN \
-  --device=/dev/net/tun \
+  --device=/dev/net/tun \   # Linux 需要；Docker Desktop(macOS/Windows)可省略
   -p 1080:1080 \
   -v $(pwd)/config/vpn-profiles/sample:/vpn:ro \
   -e OPENVPN_CONFIG=/vpn/client.ovpn \
@@ -58,6 +58,10 @@ docker run -d --name ovpn-socks \
   - 若 `HEALTHCHECK_STRICT=1`，额外要求日志包含 `Initialization Sequence Completed`。
  - 启动时会打印网络信息：`socks5 will listen on <bind:port>`、`container eth0 IPv4`、`container tun0 IPv4`，以及 `host.docker.internal` 的解析结果（macOS/Windows 可直接用该地址或 `localhost` 连接）。
 
+- DNS：默认应用 OpenVPN 服务端下发的 DNS（从日志解析 `dhcp-option DNS`），也可通过以下变量控制：
+  - `USE_VPN_DNS=1` 开启（默认），设为 `0` 跳过自动应用；
+  - `VPN_DNS=10.2.2.120,10.1.1.137` 当服务端未推送 DNS 时，可指定兜底 DNS（逗号分隔）。
+
 示例（持久化日志并开启严格健康检查）：
 ```bash
 docker compose run -d \
@@ -77,7 +81,7 @@ docker compose run -d \
 - `SOCKS5_USER` / `SOCKS5_PASS`：可选，设置后开启 SOCKS5 用户名密码认证。
 
 ## 健康检查
-镜像内置 `HEALTHCHECK`：检查 `openvpn` 进程与 `tun0` 设备。失败时容器状态为 `unhealthy`，可配合编排重启策略。
+镜像内置 `HEALTHCHECK`：检查 openvpn/sockd 进程、`tun0` 接口，以及 SOCKS5 端口监听；若 `HEALTHCHECK_STRICT=1`，还需日志包含 `Initialization Sequence Completed`。失败时容器状态为 `unhealthy`，可配合编排重启策略。
 
 ## 对比优势
 - 体积小、依赖少、构建快。
