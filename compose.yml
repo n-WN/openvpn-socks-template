@@ -14,13 +14,19 @@ services:
     environment:
       # .ovpn filename within /vpn mount; repository ships an empty directory structure only
       OPENVPN_CONFIG: ${OPENVPN_CONFIG:-/vpn/client.ovpn}
+      # OpenVPN logging and verbosity
+      OPENVPN_LOG: ${OPENVPN_LOG:-/var/log/openvpn.log}
+      OPENVPN_VERB: ${OPENVPN_VERB:-3}
       OPENVPN_AUTH_USER: ${OPENVPN_AUTH_USER:-}
       OPENVPN_AUTH_PASS: ${OPENVPN_AUTH_PASS:-}
       OPENVPN_EXTRA_ARGS: ${OPENVPN_EXTRA_ARGS:-}
       SOCKS5_PORT: ${SOCKS5_PORT:-1080}
       SOCKS5_BIND: ${SOCKS5_BIND:-0.0.0.0}
+      SOCKS_LOG: ${SOCKS_LOG:-error}
+      SOCKS_MAX_CONN: ${SOCKS_MAX_CONN:-50}
       SOCKS5_USER: ${SOCKS5_USER:-}
       SOCKS5_PASS: ${SOCKS5_PASS:-}
     volumes:
       - ${VPN_PROFILE_DIR:-./config/vpn-profiles/sample}:/vpn:ro  # put client.ovpn and certs here
+      # - ./logs:/var/log  # optional: persist logs on host
     restart: unless-stopped

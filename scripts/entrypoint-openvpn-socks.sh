@@ -9,11 +9,15 @@ OPENVPN_CONFIG="${OPENVPN_CONFIG:-/vpn/client.ovpn}"
 OPENVPN_AUTH_USER="${OPENVPN_AUTH_USER:-}"
 OPENVPN_AUTH_PASS="${OPENVPN_AUTH_PASS:-}"
 OPENVPN_EXTRA_ARGS="${OPENVPN_EXTRA_ARGS:-}"
+OPENVPN_LOG="${OPENVPN_LOG:-/var/log/openvpn.log}"
+OPENVPN_VERB="${OPENVPN_VERB:-3}"
 
 SOCKS5_PORT="${SOCKS5_PORT:-1080}"
 SOCKS5_BIND="${SOCKS5_BIND:-0.0.0.0}"
 SOCKS5_USER="${SOCKS5_USER:-}"
 SOCKS5_PASS="${SOCKS5_PASS:-}"
+SOCKS_LOG="${SOCKS_LOG:-error}"
+SOCKS_MAX_CONN="${SOCKS_MAX_CONN:-50}"
 
 if [ ! -f "$OPENVPN_CONFIG" ]; then
   log "fatal: OPENVPN_CONFIG not found: $OPENVPN_CONFIG"
@@ -36,36 +40,91 @@ if [ -n "$OPENVPN_AUTH_USER" ] || [ -n "$OPENVPN_AUTH_PASS" ]; then
   chmod 600 "$AUTH_FILE"
 fi
 
+ensure_tun() {
+  # ensure /dev/net/tun exists (helps Docker Desktop/macOS environments)
+  if [ ! -e /dev/net ]; then
+    mkdir -p /dev/net || true
+  fi
+  if [ ! -c /dev/net/tun ]; then
+    mknod /dev/net/tun c 10 200 2>/dev/null || true
+    chmod 600 /dev/net/tun 2>/dev/null || true
+  fi
+}
+
+wait_for_tun() {
+  tries=0
+  max_tries=30
+  while ! ip link show dev tun0 >/dev/null 2>&1; do
+    tries=$((tries+1))
+    if [ $tries -ge $max_tries ]; then
+      log "warning: tun0 not available after ${max_tries}s; continuing"
+      return 0
+    fi
+    sleep 1
+  done
+  log "tun0 is up"
+}
+
+ipv4_of() {
+  dev="$1"
+  ip -o -4 addr show dev "$dev" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1 || true
+}
+
+print_net_info() {
+  ETH0_IP="$(ipv4_of eth0)"
+  TUN0_IP="$(ipv4_of tun0)"
+  HOST_IP=""
+  if command -v getent >/dev/null 2>&1; then
+    HOST_IP="$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1}' | head -n1 || true)"
+  fi
+  log "socks5 will listen on ${SOCKS5_BIND}:${SOCKS5_PORT}"
+  [ -n "$ETH0_IP" ] && log "container eth0 IPv4: $ETH0_IP"
+  [ -n "$TUN0_IP" ] && log "container tun0 IPv4: $TUN0_IP"
+  if [ -n "$HOST_IP" ]; then
+    log "host.docker.internal resolves to: $HOST_IP (on macOS/Windows, connect via $HOST_IP:${SOCKS5_PORT} or localhost:${SOCKS5_PORT})"
+  else
+    log "tip: from the host, connect to localhost:${SOCKS5_PORT} (if -p published) or your host LAN IP"
+  fi
+}
+
 gen_dante_config() {
   cat >/etc/dante/sockd.conf <<EOF
 logoutput: stderr
 internal: ${SOCKS5_BIND} port = ${SOCKS5_PORT}
-external: *
+external: tun0
 socksmethod: $( [ -n "$SOCKS5_USER" ] && echo username || echo none )
 clientmethod: none
 user.privileged: root
 user.notprivileged: nobody
-user.libwrap: nobody
 client pass {
   from: 0.0.0.0/0 to: 0.0.0.0/0
-  log: error
+  log: ${SOCKS_LOG}
 }
-sockd pass {
+socks pass {
   from: 0.0.0.0/0 to: 0.0.0.0/0
-  log: error
+  log: ${SOCKS_LOG}
 }
 EOF
 }
 
 start_openvpn() {
-  set -- openvpn --config "$OPENVPN_CONFIG" \
+  cfgpath="$OPENVPN_CONFIG"
+  cfgdir=$(dirname "$cfgpath")
+  cfgbase=$(basename "$cfgpath")
+  set -- openvpn --cd "$cfgdir" --config "$cfgbase" \
     --writepid /run/openvpn.pid \
-    --log /var/log/openvpn.log \
+    --log "$OPENVPN_LOG" \
     --daemon
 
   if [ -n "$AUTH_FILE" ]; then
     set -- "$@" --auth-user-pass "$AUTH_FILE"
   fi
+
+  # Apply verbosity unless user overrode via EXTRA_ARGS
+  case " ${OPENVPN_EXTRA_ARGS} " in
+    *" --verb "*|*" --verb="*) : ;; # user supplied
+    *) set -- "$@" --verb "$OPENVPN_VERB" ;;
+  esac
 
   if [ -n "$OPENVPN_EXTRA_ARGS" ]; then
     # shellcheck disable=SC2086
@@ -73,7 +132,7 @@ start_openvpn() {
   fi
 
   log "starting openvpn with config $OPENVPN_CONFIG"
-  "$@"
+  "$@" || log "warning: openvpn exited non-zero; continuing (healthcheck may mark unhealthy)"
 }
 
 start_socks() {
@@ -87,14 +146,17 @@ start_socks() {
     adduser -D "$SOCKS5_USER" || true
     echo "$SOCKS5_USER:$SOCKS5_PASS" | chpasswd
   fi
-  log "starting dante sockd on ${SOCKS5_BIND}:${SOCKS5_PORT}"
-  exec sockd -f /etc/dante/sockd.conf -N 50 -D
+  log "starting dante sockd on ${SOCKS5_BIND}:${SOCKS5_PORT} (foreground)"
+  # run in foreground so container PID 1 stays alive
+  exec sockd -f /etc/dante/sockd.conf -N "$SOCKS_MAX_CONN"
 }
 
+ensure_tun
 start_openvpn
+wait_for_tun
+print_net_info
 
-if [ -f /var/log/openvpn.log ]; then
-  tail -n 20 /var/log/openvpn.log || true
-fi
+sleep 1
+[ -f "$OPENVPN_LOG" ] && tail -n 80 "$OPENVPN_LOG" || true
 
 start_socks
