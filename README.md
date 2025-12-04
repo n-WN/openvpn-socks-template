@@ -56,6 +56,7 @@ docker run -d --name ovpn-socks \
   - `tun0` 接口存在；
   - 指定 `SOCKS5_PORT` 监听成功；
   - 若 `HEALTHCHECK_STRICT=1`，额外要求日志包含 `Initialization Sequence Completed`。
+ - 启动时会打印网络信息：`socks5 will listen on <bind:port>`、`container eth0 IPv4`、`container tun0 IPv4`，以及 `host.docker.internal` 的解析结果（macOS/Windows 可直接用该地址或 `localhost` 连接）。
 
 示例（持久化日志并开启严格健康检查）：
 ```bash
