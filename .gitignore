@@ -11,3 +11,4 @@ config/auth/
 
 # Do not commit local notes
 docs/
+\n# Never commit local real keys\nkey/
