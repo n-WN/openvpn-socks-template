@@ -12,7 +12,7 @@ services:
     ports:
       - "${EXPOSE_SOCKS5_PORT:-1080}:${SOCKS5_PORT:-1080}"
     environment:
-      # .ovpn filename within /vpn mount (default uses sample)
+      # .ovpn filename within /vpn mount; repository ships an empty directory structure only
       OPENVPN_CONFIG: ${OPENVPN_CONFIG:-/vpn/client.ovpn}
       OPENVPN_AUTH_USER: ${OPENVPN_AUTH_USER:-}
       OPENVPN_AUTH_PASS: ${OPENVPN_AUTH_PASS:-}
@@ -22,5 +22,5 @@ services:
       SOCKS5_USER: ${SOCKS5_USER:-}
       SOCKS5_PASS: ${SOCKS5_PASS:-}
     volumes:
-      - ${VPN_PROFILE_DIR:-./config/vpn-profiles/sample}:/vpn:ro
+      - ${VPN_PROFILE_DIR:-./config/vpn-profiles/sample}:/vpn:ro  # put client.ovpn and certs here
     restart: unless-stopped

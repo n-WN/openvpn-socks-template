@@ -1,8 +1,9 @@
 # Ignore real vpn profiles by default
 vpn-profiles/*
-# Keep the sanitized sample in repo
+# Keep only empty directory structure & docs for sample
 !vpn-profiles/sample/
-!vpn-profiles/sample/**
+!vpn-profiles/sample/.gitkeep
+!vpn-profiles/sample/README.md
 
 # Never commit auth files
 auth/

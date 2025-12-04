@@ -15,7 +15,7 @@ docker build -t openvpn-socks:lite .
 
 ## 使用 compose 运行
 将 `config/vpn-profiles/<your-vpn-profile>` 挂载到容器 `/vpn`，`.ovpn` 内相对引用的 `ca/cert/key` 会自动生效。
-本仓库已提供脱敏示例：`config/vpn-profiles/sample/`。
+注意：远程仓库不包含任何真实或示例的 `.ovpn/.crt/.key` 文件，仅提供目录结构（`config/vpn-profiles/sample/` 空目录）。
 
 1) 复制 `.env` 示例并按需填写：
 ```bash
@@ -23,14 +23,14 @@ cp .env.example .env
 # 编辑 .env 填写 OPENVPN_AUTH_USER/OPENVPN_AUTH_PASS（若需要）以及 SOCKS5_USER/PASS（如需鉴权）
 ```
 
-2) 选择一个 VPN 配置目录（默认使用示例 `config/vpn-profiles/sample`），然后：
+2) 准备你的 VPN 配置目录（默认挂载空目录 `config/vpn-profiles/sample`，请将 `client.ovpn` 及所需证书放入其中），然后：
 ```bash
 docker compose up -d
 ```
 
 默认将宿主机 `EXPOSE_SOCKS5_PORT`(默认 1080) 映射到容器 `SOCKS5_PORT`(默认 1080)。
 
-也可以直接 `docker run`（默认使用示例 profile）：
+也可以直接 `docker run`（默认挂载空目录；需自行放置 `client.ovpn` 与证书）：
 ```bash
 docker run -d --name ovpn-socks \
   --cap-add=NET_ADMIN \
