@@ -2,6 +2,9 @@
 .DS_Store
 *.swp
 
+# Environment (may contain secrets)
+.env
+
 # Runtime
 *.log
 

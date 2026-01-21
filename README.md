@@ -1,108 +1,99 @@
-# 极简可复现的 OpenVPN -> SOCKS5 容器
+# OpenVPN-SOCKS5
 
-特点（对比 curve25519xsalsa20poly1305/docker-openvpn-socks5）：
-- 更轻：基于 `alpine:3.20` + `openvpn` + `dante-server` + `dumb-init`，无额外 Go 代码/构建步骤。
-- 更简单：单入口脚本，依赖仅 OpenVPN/MicroSocks；镜像构建快、攻击面小。
-- 可选鉴权：`SOCKS5_USER/SOCKS5_PASS` 环境变量开启用户名密码。
-- 健康检查：检测 `openvpn` 进程和 `tun0`。
-- 完全参数化：支持 `OPENVPN_AUTH_USER/PASS`、`OPENVPN_EXTRA_ARGS`，易多实例。
+Lightweight OpenVPN tunnel → SOCKS5 proxy container.
 
-## 构建镜像
-在本目录下构建：
+**Features:** Alpine-based, ~25MB image, built-in healthcheck, optional SOCKS5 auth, kill-switch support.
+
+## Quick Start
+
 ```bash
-docker build -t openvpn-socks:lite .
+# 1. Prepare VPN config in key/ directory
+key/
+├── client.ovpn
+├── ca.crt, client.crt, client.key
+└── auth.txt   # line1: username, line2: password (recommended)
+
+# 2. Start
+docker compose up -d
+
+# 3. Use proxy
+curl --socks5 localhost:1080 https://httpbin.org/ip
 ```
 
-## 使用 compose 运行
-将 `config/vpn-profiles/<your-vpn-profile>` 挂载到容器 `/vpn`，`.ovpn` 内相对引用的 `ca/cert/key` 会自动生效。
-注意：远程仓库不包含任何真实或示例的 `.ovpn/.crt/.key` 文件，仅提供目录结构（`config/vpn-profiles/sample/` 空目录）。
+## Credentials
 
-1) 复制 `.env` 示例并按需填写：
+**Option 1: `key/auth.txt`** (recommended - supports special chars like `#`)
+```
+username
+password
+```
+
+**Option 2: Environment variables**
 ```bash
 cp .env.example .env
-# 编辑 .env 填写 OPENVPN_AUTH_USER/OPENVPN_AUTH_PASS（若需要）以及 SOCKS5_USER/PASS（如需鉴权）
+# Edit OPENVPN_AUTH_USER and OPENVPN_AUTH_PASS
 ```
 
-2) 准备你的 VPN 配置目录（默认挂载空目录 `config/vpn-profiles/sample`，请将 `client.ovpn` 及所需证书放入其中），然后：
-```bash
-docker compose up -d
-```
+> ⚠️ `.env` treats `#` as comment - passwords get truncated. Use `auth.txt` instead.
 
-默认将宿主机 `EXPOSE_SOCKS5_PORT`(默认 1080) 映射到容器 `SOCKS5_PORT`(默认 1080)。
+## Environment Variables
 
-也可以直接 `docker run`（默认挂载空目录；需自行放置 `client.ovpn` 与证书）：
+| Variable | Default | Description |
+|----------|---------|-------------|
+| **OpenVPN** |||
+| `OPENVPN_CONFIG` | `/vpn/client.ovpn` | Config file path |
+| `OPENVPN_AUTH_FILE` | `/vpn/auth.txt` | Credentials file (priority over env) |
+| `OPENVPN_AUTH_USER/PASS` | - | VPN credentials |
+| `OPENVPN_EXTRA_ARGS` | - | Extra openvpn args |
+| `OPENVPN_VERB` | `3` | Log verbosity (0-11) |
+| **SOCKS5** |||
+| `SOCKS5_PORT` | `1080` | Proxy port |
+| `SOCKS5_USER/PASS` | - | Proxy authentication |
+| `SOCKS_MAX_CONN` | `3` | Max concurrent connections |
+| `SOCKS_LOG` | `error` | Log level (`error` or `connect error`) |
+| **Security** |||
+| `ENABLE_KILL_SWITCH` | `0` | iptables leak protection |
+| `SOCKS_CLIENT_CIDRS` | `0.0.0.0/0` | Allowed client CIDRs |
+| **DNS** |||
+| `USE_VPN_DNS` | `1` | Use VPN-pushed DNS |
+| `VPN_DNS` | - | Fallback DNS (comma-separated) |
+
+## Docker Run
+
 ```bash
-docker run -d --name ovpn-socks \
+docker run -d --name openvpn-socks \
   --cap-add=NET_ADMIN \
-  --device=/dev/net/tun \   # Linux 需要；Docker Desktop(macOS/Windows)可省略
+  --device=/dev/net/tun \
   -p 1080:1080 \
-  -v $(pwd)/config/vpn-profiles/sample:/vpn:ro \
-  -e OPENVPN_CONFIG=/vpn/client.ovpn \
-  -e OPENVPN_AUTH_USER=your_user \
-  -e OPENVPN_AUTH_PASS=your_pass \
-  -e SOCKS5_USER=proxyuser \   # 可选
-  -e SOCKS5_PASS=proxypass \   # 可选
-  -e SOCKS5_PORT=1080 \        # 可选
+  -v $(pwd)/key:/vpn:ro \
   openvpn-socks:lite
 ```
 
-## 日志与健康检查
-- OpenVPN 日志：默认写入 `/var/log/openvpn.log`（可通过 `OPENVPN_LOG` 指定），启动时会自动 `tail` 最近 80 行；也可将宿主机目录挂载到 `/var/log` 持久化。
-  - 若需让 `docker logs` 持续输出 OpenVPN 日志，设置 `STREAM_OPENVPN_LOG=1`（默认 0）。可用 `STREAM_OPENVPN_LOG_LINES=+1` 输出全量；或设为数字仅输出最近 N 行后持续跟随。
-- OpenVPN 详细程度：`OPENVPN_VERB`（默认 3），也可用 `OPENVPN_EXTRA_ARGS` 自定义（若两者同时指定，以 `EXTRA_ARGS` 内为准）。
-- SOCKS 日志：`SOCKS_LOG`（默认 `error`，可设为 `connect error` 记录连接与错误）。最大并发 `SOCKS_MAX_CONN`（默认 50）。
-- 健康检查：镜像内置 `HEALTHCHECK`，脚本检查：
-  - `openvpn` 进程存在；
-  - `sockd` 进程存在；
-  - `tun0` 接口存在；
-  - 指定 `SOCKS5_PORT` 监听成功；
-  - 若 `HEALTHCHECK_STRICT=1`，额外要求日志包含 `Initialization Sequence Completed`。
- - 启动时会打印网络信息：`socks5 will listen on <bind:port>`、`container eth0 IPv4`、`container tun0 IPv4`，以及 `host.docker.internal` 的解析结果（macOS/Windows 可直接用该地址或 `localhost` 连接）。
+## Troubleshooting
 
-- DNS：默认应用 OpenVPN 服务端下发的 DNS（从日志解析 `dhcp-option DNS`），也可通过以下变量控制：
-  - up/down 钩子：容器默认使用 OpenVPN `--script-security 2 --up/--down` 钩子在隧道建立/拆除时更新 `/etc/resolv.conf`（读取 `foreign_option_*`）；
-  - `USE_VPN_DNS=1` 保持向后兼容的兜底（基于日志解析），通常无需开启；
-  - `VPN_DNS=10.2.2.120,10.1.1.137` 在服务端未推送 DNS 时可指定兜底（逗号分隔）。
-
-示例（持久化日志并开启严格健康检查）：
 ```bash
-docker compose run -d \
-  -e HEALTHCHECK_STRICT=1 \
-  -e OPENVPN_VERB=4 \
-  -e SOCKS_LOG="connect error" \
-  -v $(pwd)/logs:/var/log \
-  openvpn-socks
+# Check credentials
+docker exec openvpn-socks cat /run/openvpn-auth.txt
+
+# View logs
+docker logs openvpn-socks
+docker exec openvpn-socks cat /var/log/openvpn.log
 ```
 
-## 环境变量
-- `OPENVPN_CONFIG`：必填，容器内 ovpn 路径，默认 `/vpn/client.ovpn`。
-- `OPENVPN_AUTH_USER` / `OPENVPN_AUTH_PASS`：可选，若服务端要求 `auth-user-pass`。
-- `OPENVPN_EXTRA_ARGS`：可选，追加 OpenVPN 启动参数（如 `--verb 3 --auth-nocache`）。
-- `SOCKS5_PORT`：SOCKS5 端口，默认 1080。
-- `SOCKS5_BIND`：绑定地址，默认 `0.0.0.0`。
-- `SOCKS5_USER` / `SOCKS5_PASS`：可选，设置后开启 SOCKS5 用户名密码认证。
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| `AUTH_FAILED` | Password with `#` truncated | Use `auth.txt` |
+| `unhealthy` | tun0 not established | Check VPN config/network |
+| `permission denied` | Stale container mount | `docker rm` then recreate |
 
-## 健康检查
-镜像内置 `HEALTHCHECK`：检查 openvpn/sockd 进程、`tun0` 接口，以及 SOCKS5 端口监听；若 `HEALTHCHECK_STRICT=1`，还需日志包含 `Initialization Sequence Completed`。失败时容器状态为 `unhealthy`，可配合编排重启策略。
+## Security
 
-## 防漏与安全（可选）
-- `ENABLE_KILL_SWITCH=1` 开启 iptables Kill‑Switch：
-  - 允许 `lo`、`ESTABLISHED,RELATED`、`tun+`；
-  - 仅允许 `eth0` 到当前 resolv.conf 的 DNS 服务器及 OpenVPN 远端 `remote host:port`；
-  - 其余出站 `DROP`，防止 VPN 中断时的流量泄漏；
-  - 注意：若远端 IP 动态变化，需重启容器以刷新规则。
-- `SOCKS_CLIENT_CIDRS` 限制 SOCKS 客户端来源网段（默认 `0.0.0.0/0` 全部允许；建议设为 `127.0.0.1/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`）。
+- **Kill-Switch**: `ENABLE_KILL_SWITCH=1` - blocks traffic if VPN drops
+- **SOCKS Auth**: Set `SOCKS5_USER/PASS` to require authentication
+- **Client Restriction**: `SOCKS_CLIENT_CIDRS=192.168.0.0/16` limits source IPs
 
-## 进程模型与日志
-- `sockd` 以守护方式运行，OpenVPN 为前台主进程（OpenVPN 退出则容器退出，便于重启策略接管）。
-- `STREAM_OPENVPN_LOG=1` 可将 OpenVPN 日志连续推送到 `docker logs`（配合 `STREAM_OPENVPN_LOG_LINES` 控制初始输出行数）。
+## Tips
 
-## 对比优势
-- 体积小、依赖少、构建快。
-- 使用发行版 dante-server，稳定且支持用户名密码。
-- 健康检查+参数化，适合多实例、一机多隧道。
-- 安全性可控：可选 SOCKS5 鉴权，auth 文件在 `/run/`，权限 600。
-
-## 小贴士
-- OpenVPN 常见需求：若服务端 MTU 推送过大，添加环境 `OPENVPN_EXTRA_ARGS="--tun-mtu 1500 --mssfix 1460"`。
-- 如需静态路由/iptables，可在编排层挂载额外脚本，通过 `OPENVPN_EXTRA_ARGS="--up /path/to/script.sh --route-noexec"` 等方式注入。
+- MTU issues: `OPENVPN_EXTRA_ARGS="--tun-mtu 1500 --mssfix 1460"`
+- Stream logs: `STREAM_OPENVPN_LOG=1` pipes OpenVPN log to `docker logs`
+- Strict healthcheck: `HEALTHCHECK_STRICT=1` requires `Initialization Sequence Completed`

@@ -8,6 +8,14 @@ log() {
 OPENVPN_CONFIG="${OPENVPN_CONFIG:-/vpn/client.ovpn}"
 OPENVPN_AUTH_USER="${OPENVPN_AUTH_USER:-}"
 OPENVPN_AUTH_PASS="${OPENVPN_AUTH_PASS:-}"
+
+# Support reading credentials from file (avoids .env # comment issues)
+OPENVPN_AUTH_FILE="${OPENVPN_AUTH_FILE:-/vpn/auth.txt}"
+if [ -f "$OPENVPN_AUTH_FILE" ]; then
+  OPENVPN_AUTH_USER=$(sed -n '1p' "$OPENVPN_AUTH_FILE")
+  OPENVPN_AUTH_PASS=$(sed -n '2p' "$OPENVPN_AUTH_FILE")
+  log "loaded credentials from $OPENVPN_AUTH_FILE"
+fi
 OPENVPN_EXTRA_ARGS="${OPENVPN_EXTRA_ARGS:-}"
 OPENVPN_LOG="${OPENVPN_LOG:-/var/log/openvpn.log}"
 OPENVPN_VERB="${OPENVPN_VERB:-3}"
@@ -60,12 +68,11 @@ ensure_tun() {
 
 wait_for_tun() {
   tries=0
-  max_tries=30
+  warn_after=30
   while ! ip link show dev tun0 >/dev/null 2>&1; do
     tries=$((tries+1))
-    if [ $tries -ge $max_tries ]; then
-      log "warning: tun0 not available after ${max_tries}s; continuing"
-      return 0
+    if [ $tries -eq $warn_after ]; then
+      log "warning: tun0 not available after ${warn_after}s; waiting (socks will start once tun0 is up)"
     fi
     sleep 1
   done
@@ -191,8 +198,9 @@ start_socks() {
     adduser -D "$SOCKS5_USER" || true
     echo "$SOCKS5_USER:$SOCKS5_PASS" | chpasswd
   fi
-  log "starting dante sockd on ${SOCKS5_BIND}:${SOCKS5_PORT} (daemon)"
-  sockd -f /etc/dante/sockd.conf -N "$SOCKS_MAX_CONN" -D
+  log "starting dante sockd on ${SOCKS5_BIND}:${SOCKS5_PORT} (daemon) with max-conn=${SOCKS_MAX_CONN}"
+  # Use -N 1 (single main process) to reduce fork overhead; maxworkers in config controls concurrency
+  sockd -f /etc/dante/sockd.conf -N 1 -D
 }
 
 configure_killswitch() {
